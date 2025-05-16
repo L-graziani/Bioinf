@@ -8,54 +8,49 @@ def obtener_mejores_alineaciones(xml_file, num_mejores=10):
     tree = ET.parse(xml_file)
     root = tree.getroot()
 
-    # Inicializar lista para almacenar las alineaciones
+    # Intentar extraer la secuencia completa de la consulta (si está en el XML)
+    # Ajusta la ruta si en tu XML el tag es distinto
+    query_sequence = root.findtext(".//Iteration/Iteration_query-sequence")
+    
     alineaciones = []
-    query_sequence = None
 
-    # Recorrer todos los hits en el archivo XML
-    for iteration in root.findall(".//Hit"):
-        hit_id = iteration.find("Hit_id").text
-        hit_def = iteration.find("Hit_def").text
-        hit_evalue = float(iteration.find("Hit_hsps/Hsp/Hsp_evalue").text)
-        
-        # Recorrer los HSPs dentro de cada Hit
-        for hsp in iteration.findall(".//Hsp"):
-            # Extraer la secuencia alineada de la consulta (qseq) y del hit (hseq)
-            secuencia_qseq = hsp.find("Hsp_qseq").text
-            secuencia_hseq = hsp.find("Hsp_hseq").text
-            
-            # Guardar la secuencia de consulta si es la primera vez que la encontramos
+    # Recorrer todos los hits
+    for hit in root.findall(".//Hit"):
+        hit_id    = hit.findtext("Hit_id")
+        evalue    = float(hit.findtext("Hit_hsps/Hsp/Hsp_evalue"))
+
+        for hsp in hit.findall(".//Hsp"):
+            qseq = hsp.findtext("Hsp_qseq")
+            hseq = hsp.findtext("Hsp_hseq")
+
+            # Si no había query_sequence, la guardo a partir de este primer HSP
             if query_sequence is None:
-                query_sequence = secuencia_qseq
-            
-            # Guardar los datos de la alineación junto con las secuencias
-            alineaciones.append((hit_id, secuencia_qseq, secuencia_hseq, hit_evalue))
+                query_sequence = qseq
 
-    # Filtrar las alineaciones para excluir aquellas cuyo hit es igual a la secuencia de consulta
-    alineaciones = [alineacion for alineacion in alineaciones if alineacion[1] != query_sequence]
+            alineaciones.append((hit_id, qseq, hseq, evalue))
 
-    # Ordenar las alineaciones por el valor E (de menor a mayor)
-    alineaciones_ordenadas = sorted(alineaciones, key=lambda x: x[3])
+    # Excluir auto‑alineaciones (donde qseq == query_sequence)
+    alineaciones = [a for a in alineaciones if a[1] != query_sequence]
 
-    # Obtener las mejores alineaciones (10 mejores)
-    mejores_alineaciones = alineaciones_ordenadas[:num_mejores]
+    # Ordenar por E‑value y quedarnos con las mejores
+    mejores = sorted(alineaciones, key=lambda x: x[3])[:num_mejores]
 
-    return query_sequence, mejores_alineaciones
+    return query_sequence, mejores
 
 def guardar_en_fasta(query_sequence, alineaciones, output_fasta):
-    # Guardar las secuencias en formato FASTA
-    with open(output_fasta, "w") as fasta_file:
-        # Escribir la secuencia de consulta
-        fasta_file.write(f">consulta\n")
-        fasta_file.write(f"{query_sequence}\n")
+    with open(output_fasta, "w") as out:
+        # Escribo la consulta
+        out.write(">consulta\n")
+        out.write(query_sequence + "\n")
 
-        # Guardar las mejores secuencias de los hits
-        for idx, alineacion in enumerate(alineaciones, 1):
-            hit_id, _, secuencia_hseq, _ = alineacion
-            fasta_file.write(f">hit_{hit_id}\n")
-            fasta_file.write(f"{secuencia_hseq}\n")
-    
-    print(f"Las secuencias alineadas han sido guardadas en '{output_fasta}'")
+        # Escribo cada hit
+        for idx, (hit_id, qseq, hseq, evalue) in enumerate(alineaciones, start=1):
+            # Si quieres también la parte de consulta alineada:
+
+            out.write(f">hit_{idx}|{hit_id}_h e={evalue}\n")
+            out.write(hseq + "\n")
+
+    print(f"Guardado en {output_fasta}")
     return output_fasta
 def run_clustalw(fasta_path: str,
                   clustalw_exe: str = 'clustalw2',
