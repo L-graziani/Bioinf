@@ -1,340 +1,449 @@
-# six_frame_translation.py
+#!/usr/bin/env python3
+"""
+Módulo para traducción de secuencias de nucleótidos en seis marcos de lectura
+y análisis de motifs y dominios usando herramientas EMBOSS.
+"""
 
 import sys
 import os
 import tempfile
 import subprocess
+import datetime
+from pathlib import Path
+from typing import List, Tuple, Optional
 from Bio import SeqIO
 
 
-def six_frame_translation(input_fasta, output_fasta, emboss_dir=None, table=1, clean=True):
-    """
-    Traduce la secuencia de nucleótidos en las seis fases de lectura usando EMBOSS Transeq vía subprocess.
-
-    :param input_fasta: Ruta al fasta de entrada (nucleótidos)
-    :param output_fasta: Ruta al fasta de salida (proteínas)
-    :param emboss_dir: Directorio donde está instalado EMBOSS (si no está en PATH)
-    :param table: Código de tabla de traducción (default 1: estándar)
-    :param clean: Si True, elimina archivos temporales.
-    """
-
-    # Crear un archivo temporal para la salida de Transeq
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".faa")
-    os.close(tmp_fd)
-
-    # Determinar ruta al ejecutable transeq
-    transeq_exec = os.path.join(emboss_dir, 'transeq')
-
-    # Construir el comando de Transeq
-    cmd = [
-        transeq_exec,
-        '-sequence', input_fasta,
-        '-outseq', tmp_path,
-        '-table', str(table),
-        '-frame', '6'
-    ]
-
-    # Ejecutar Transeq
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        sys.stderr.write(f"Error al ejecutar transeq: {result.stderr}\n")
-        if not clean:
-            sys.stderr.write(f"Archivo temporal conservado en: {tmp_path}\n")
-        sys.exit(result.returncode)
-
-    # Leer el resultado y escribir en el fasta de salida
-    proteins = list(SeqIO.parse(tmp_path, "fasta"))
-    if not proteins:
-        sys.stderr.write("No se encontraron secuencias traducidas en la salida de Transeq.\n")
-        sys.exit(1)
-
-    SeqIO.write(proteins, output_fasta, "fasta")
-    print(f"Traducción completada. Se han generado {len(proteins)} secuencias proteicas.")
-
-    # Limpiar temporal si corresponde
-    if clean:
-        os.remove(tmp_path)
-
-
-
-def contar_secuencias_fasta(fasta_path):
-    """Cuenta el número de secuencias en un archivo FASTA"""
-    count = 0
-    secuencias_info = []
+class SixFrameTranslator:
+    """Clase para manejar la traducción en seis marcos de lectura."""
     
-    with open(fasta_path, 'r') as f:
-        current_header = None
-        current_seq_length = 0
+    def __init__(self, emboss_dir: Optional[str] = None):
+        """
+        Inicializa el traductor.
         
-        for line in f:
-            line = line.strip()
-            if line.startswith('>'):
-                if current_header:
-                    secuencias_info.append((current_header, current_seq_length))
-                current_header = line[1:]  # Remove '>'
+        Args:
+            emboss_dir: Directorio donde está instalado EMBOSS (si no está en PATH)
+        """
+        self.emboss_dir = emboss_dir
+        
+    def translate(self, input_fasta: str, output_fasta: str, 
+                 table: int = 1, clean: bool = True) -> int:
+        """
+        Traduce la secuencia de nucleótidos en las seis fases de lectura usando EMBOSS Transeq.
+
+        Args:
+            input_fasta: Ruta al fasta de entrada (nucleótidos)
+            output_fasta: Ruta al fasta de salida (proteínas)
+            table: Código de tabla de traducción (default 1: estándar)
+            clean: Si True, elimina archivos temporales
+
+        Returns:
+            Número de secuencias proteicas generadas
+            
+        Raises:
+            FileNotFoundError: Si no se encuentra el archivo de entrada o transeq
+            subprocess.CalledProcessError: Si falla la ejecución de transeq
+        """
+        if not os.path.isfile(input_fasta):
+            raise FileNotFoundError(f"Archivo FASTA de entrada no encontrado: {input_fasta}")
+
+        # Crear archivo temporal para la salida de Transeq
+        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".faa")
+        os.close(tmp_fd)
+
+        try:
+            # Determinar ruta al ejecutable transeq
+            transeq_exec = self._get_transeq_path()
+
+            # Construir y ejecutar el comando de Transeq
+            cmd = [
+                transeq_exec,
+                '-sequence', input_fasta,
+                '-outseq', tmp_path,
+                '-table', str(table),
+                '-frame', '6'
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+            # Leer el resultado y escribir en el fasta de salida
+            proteins = list(SeqIO.parse(tmp_path, "fasta"))
+            if not proteins:
+                raise ValueError("No se encontraron secuencias traducidas en la salida de Transeq")
+
+            SeqIO.write(proteins, output_fasta, "fasta")
+            print(f"Traducción completada. Se han generado {len(proteins)} secuencias proteicas.")
+            return len(proteins)
+
+        except subprocess.CalledProcessError as e:
+            error_msg = f"Error al ejecutar transeq: {e.stderr if e.stderr else str(e)}"
+            if not clean:
+                error_msg += f"\nArchivo temporal conservado en: {tmp_path}"
+            raise subprocess.CalledProcessError(e.returncode, e.cmd, error_msg)
+        
+        finally:
+            # Limpiar temporal si corresponde
+            if clean and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+
+    def _get_transeq_path(self) -> str:
+        """Obtiene la ruta al ejecutable transeq."""
+        if self.emboss_dir:
+            transeq_path = os.path.join(self.emboss_dir, 'transeq')
+            if not os.path.isfile(transeq_path):
+                raise FileNotFoundError(f"No se encontró transeq en: {transeq_path}")
+            return transeq_path
+        return 'transeq'  # Asume que está en PATH
+
+
+class SequenceAnalyzer:
+    """Clase para analizar motifs y dominios en secuencias proteicas."""
+    
+    def __init__(self, emboss_bin_path: str):
+        """
+        Inicializa el analizador.
+        
+        Args:
+            emboss_bin_path: Ruta al directorio bin de EMBOSS
+        """
+        self.emboss_bin_path = emboss_bin_path
+        self._validate_emboss_tools()
+    
+    def _validate_emboss_tools(self):
+        """Valida que las herramientas EMBOSS necesarias estén disponibles."""
+        tools = ['prosextract', 'patmatmotifs']
+        for tool in tools:
+            tool_path = os.path.join(self.emboss_bin_path, tool)
+            if not os.path.isfile(tool_path):
+                raise FileNotFoundError(f"No se encontró '{tool}' en: {tool_path}")
+
+    def count_sequences(self, fasta_path: str) -> Tuple[int, List[Tuple[str, int]]]:
+        """
+        Cuenta el número de secuencias en un archivo FASTA.
+        
+        Args:
+            fasta_path: Ruta al archivo FASTA
+            
+        Returns:
+            Tupla con (número_de_secuencias, lista_de_info_secuencias)
+        """
+        sequences_info = []
+        
+        try:
+            with open(fasta_path, 'r') as f:
+                current_header = None
                 current_seq_length = 0
-                count += 1
-            elif line and not line.startswith('>'):
-                current_seq_length += len(line)
+                
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('>'):
+                        if current_header:
+                            sequences_info.append((current_header, current_seq_length))
+                        current_header = line[1:]  # Remove '>'
+                        current_seq_length = 0
+                    elif line and not line.startswith('>'):
+                        current_seq_length += len(line)
+                
+                # Agregar la última secuencia
+                if current_header:
+                    sequences_info.append((current_header, current_seq_length))
         
-        # Add the last sequence
-        if current_header:
-            secuencias_info.append((current_header, current_seq_length))
-    
-    return count, secuencias_info
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Archivo FASTA no encontrado: {fasta_path}")
+        
+        return len(sequences_info), sequences_info
 
-def extraer_secuencias_individuales(fasta_path):
-    """Extrae cada secuencia del FASTA como archivos temporales individuales"""
-    secuencias = []
-    current_header = None
-    current_seq = []
-    
-    with open(fasta_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith('>'):
-                if current_header and current_seq:
-                    secuencias.append((current_header, ''.join(current_seq)))
-                current_header = line
-                current_seq = []
-            elif line:
-                current_seq.append(line)
+    def extract_individual_sequences(self, fasta_path: str) -> List[Tuple[str, str]]:
+        """
+        Extrae cada secuencia del FASTA como tuplas (header, secuencia).
         
-        # Add the last sequence
-        if current_header and current_seq:
-            secuencias.append((current_header, ''.join(current_seq)))
-    
-    return secuencias
-    """Extrae cada secuencia del FASTA como archivos temporales individuales"""
-    secuencias = []
-    current_header = None
-    current_seq = []
-    
-    with open(fasta_path, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith('>'):
-                if current_header and current_seq:
-                    secuencias.append((current_header, ''.join(current_seq)))
-                current_header = line
-                current_seq = []
-            elif line:
-                current_seq.append(line)
+        Args:
+            fasta_path: Ruta al archivo FASTA
+            
+        Returns:
+            Lista de tuplas (header, secuencia)
+        """
+        sequences = []
+        current_header = None
+        current_seq = []
         
-        # Add the last sequence
-        if current_header and current_seq:
-            secuencias.append((current_header, ''.join(current_seq)))
-    
-    return secuencias
+        with open(fasta_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith('>'):
+                    if current_header and current_seq:
+                        sequences.append((current_header, ''.join(current_seq)))
+                    current_header = line
+                    current_seq = []
+                elif line:
+                    current_seq.append(line)
+            
+            # Agregar la última secuencia
+            if current_header and current_seq:
+                sequences.append((current_header, ''.join(current_seq)))
+        
+        return sequences
 
-def analizar_secuencias_individuales(fasta_path, prosite_dat_path, emboss_bin_path):
-    """Analiza cada secuencia del FASTA por separado para asegurar que todas se procesen"""
-    # First try the normal approach
-    try:
-        resultado_normal = analizar_motifs_dominios(fasta_path, prosite_dat_path, emboss_bin_path)
+    def analyze_motifs_domains(self, fasta_path: str, prosite_dat_path: str) -> str:
+        """
+        Analiza motifs y dominios en secuencias proteicas usando PROSITE.
         
-        # Check if results contain multiple sequences by counting sequence headers in output
-        sequence_count_in_results = resultado_normal.count('Sequence:') + resultado_normal.count('# Sequence')
-        fasta_sequence_count, _ = contar_secuencias_fasta(fasta_path)
+        Args:
+            fasta_path: Ruta al archivo FASTA con secuencias proteicas
+            prosite_dat_path: Ruta al archivo prosite.dat
+            
+        Returns:
+            Resultado del análisis como string
+        """
+        # Validar archivos de entrada
+        if not os.path.isfile(fasta_path):
+            raise FileNotFoundError(f"Archivo FASTA no encontrado: {fasta_path}")
+        if not os.path.isfile(prosite_dat_path):
+            raise FileNotFoundError(f"Archivo prosite.dat no encontrado: {prosite_dat_path}")
+
+        prosite_dir = os.path.dirname(prosite_dat_path)
         
-        if sequence_count_in_results >= fasta_sequence_count:
-            print(f"✓ Método normal procesó todas las secuencias ({sequence_count_in_results}/{fasta_sequence_count})")
-            return resultado_normal
-        else:
-            print(f"⚠ Método normal solo procesó {sequence_count_in_results}/{fasta_sequence_count} secuencias")
-            print("Intentando método individual...")
-    except Exception as e:
-        print(f"Método normal falló: {e}")
-        print("Intentando método individual...")
-    
-    # Individual sequence approach
-    secuencias = extraer_secuencias_individuales(fasta_path)
-    resultados_combinados = []
-    
-    patmatmotifs_path = os.path.join(emboss_bin_path, "patmatmotifs")
-    
-    for i, (header, seq) in enumerate(secuencias, 1):
-        print(f"Procesando secuencia {i}/{len(secuencias)}: {header[:50]}...")
+        # Configurar variables de entorno
+        os.environ["EMBOSS_DATA"] = prosite_dir
         
-        # Create temporary file for this sequence
-        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".fasta") as temp_fasta:
-            temp_fasta.write(f"{header}\n")
-            # Write sequence in lines of 80 characters
-            for j in range(0, len(seq), 80):
-                temp_fasta.write(seq[j:j+80] + "\n")
-            temp_fasta_path = temp_fasta.name
+        # Ejecutar prosextract
+        self._run_prosextract(prosite_dir)
+        
+        # Ejecutar patmatmotifs
+        return self._run_patmatmotifs(fasta_path)
+
+    def _run_prosextract(self, prosite_dir: str):
+        """Ejecuta prosextract para preparar la base de datos PROSITE."""
+        prosextract_path = os.path.join(self.emboss_bin_path, "prosextract")
+        
+        # Crear directorio PROSITE si no existe
+        prosite_output_dir = os.path.join(prosite_dir, "PROSITE")
+        os.makedirs(prosite_output_dir, exist_ok=True)
+        
+        # Intentar diferentes enfoques para ejecutar prosextract
+        commands_to_try = [
+            [prosextract_path, "-prositedir", prosite_dir],
+            [prosextract_path],
+            [prosextract_path, "-prositedir", prosite_dir, "-outdir", prosite_output_dir]
+        ]
+        
+        for i, cmd in enumerate(commands_to_try, 1):
+            try:
+                print(f"Ejecutando prosextract (intento {i})...")
+                subprocess.run(cmd, check=True, cwd=prosite_dir, 
+                             capture_output=True, text=True)
+                print("prosextract ejecutado exitosamente")
+                return
+            except subprocess.CalledProcessError as e:
+                if i == len(commands_to_try):
+                    raise RuntimeError(f"Falló prosextract con todos los enfoques: {e}")
+                continue
+
+    def _run_patmatmotifs(self, fasta_path: str) -> str:
+        """Ejecuta patmatmotifs para el análisis de motifs."""
+        patmatmotifs_path = os.path.join(self.emboss_bin_path, "patmatmotifs")
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".out") as temp_out:
             output_path = temp_out.name
         
         try:
-            subprocess.run([
+            print("Ejecutando patmatmotifs...")
+            cmd = [
                 patmatmotifs_path,
-                "-sequence", temp_fasta_path,
+                "-sequence", fasta_path,
                 "-outfile", output_path,
                 "-full", "Y",
-                "-auto", "Y"
-            ], check=True)
+                "-auto", "Y",
+                "-sformat", "fasta",
+                "-sbegin", "1",
+                "-send", "0"
+            ]
+            
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+            print("patmatmotifs ejecutado exitosamente")
+            
+            if result.stderr:
+                print(f"Mensajes de patmatmotifs: {result.stderr}")
             
             with open(output_path, "r") as result_file:
-                resultado_individual = result_file.read()
-                resultados_combinados.append(f"\n{'='*60}\n{header}\n{'='*60}\n{resultado_individual}")
-        
+                resultado = result_file.read()
+                print(f"Tamaño del archivo de resultados: {len(resultado)} caracteres")
+                return resultado
+                
         except subprocess.CalledProcessError as e:
-            resultados_combinados.append(f"\n{'='*60}\n{header}\n{'='*60}\nError procesando esta secuencia: {e}\n")
-        
+            print(f"Error ejecutando patmatmotifs: {e}")
+            if e.stderr:
+                print(f"Error detallado: {e.stderr}")
+            raise
         finally:
-            # Clean up temporary files
-            if os.path.exists(temp_fasta_path):
-                os.remove(temp_fasta_path)
             if os.path.exists(output_path):
                 os.remove(output_path)
-    
-    return "\n".join(resultados_combinados)
 
-def analizar_motifs_dominios(fasta_path, prosite_dat_path, emboss_bin_path):
-    if not os.path.isfile(fasta_path):
-        raise FileNotFoundError(f"Archivo FASTA no encontrado: {fasta_path}")
-    if not os.path.isfile(prosite_dat_path):
-        raise FileNotFoundError(f"Archivo prosite.dat no encontrado: {prosite_dat_path}")
-    if not os.path.isdir(emboss_bin_path):
-        raise NotADirectoryError(f"Directorio EMBOSS bin no válido: {emboss_bin_path}")
-    
-    # Get the directory containing prosite.dat
-    prosite_dir = os.path.dirname(prosite_dat_path)
-    
-    # Set EMBOSS_DATA environment variable
-    os.environ["EMBOSS_DATA"] = prosite_dir
-    
-    # Check if prosextract exists
-    prosextract_path = os.path.join(emboss_bin_path, "prosextract")
-    if not os.path.isfile(prosextract_path):
-        raise FileNotFoundError(f"No se encontró 'prosextract' en: {prosextract_path}")
-    
-    # Create PROSITE subdirectory if it doesn't exist
-    prosite_output_dir = os.path.join(prosite_dir, "PROSITE")
-    if not os.path.exists(prosite_output_dir):
-        print(f"Creando directorio PROSITE: {prosite_output_dir}")
-        os.makedirs(prosite_output_dir, exist_ok=True)
-    
-    # Run prosextract with the directory path, not the file path
-    try:
-        print(f"Ejecutando prosextract en directorio: {prosite_dir}")
-        subprocess.run([
-            prosextract_path,
-            "-prositedir", prosite_dir
-        ], check=True, cwd=prosite_dir)
-        print("prosextract ejecutado exitosamente")
-    except subprocess.CalledProcessError as e:
-        print(f"Error ejecutando prosextract: {e}")
-        # Try alternative approach without explicit -prositedir flag
-        try:
-            print("Intentando enfoque alternativo...")
-            subprocess.run([prosextract_path], check=True, cwd=prosite_dir)
-            print("prosextract ejecutado exitosamente (enfoque alternativo)")
-        except subprocess.CalledProcessError as e2:
-            # Try one more approach with explicit output directory
-            try:
-                print("Intentando con directorio de salida explícito...")
-                subprocess.run([
-                    prosextract_path,
-                    "-prositedir", prosite_dir,
-                    "-outdir", prosite_output_dir
-                ], check=True, cwd=prosite_dir)
-                print("prosextract ejecutado exitosamente (con outdir)")
-            except subprocess.CalledProcessError as e3:
-                raise RuntimeError(f"Falló prosextract con todos los enfoques: {e}, {e2}, {e3}")
-    
-    # Check if patmatmotifs exists
-    patmatmotifs_path = os.path.join(emboss_bin_path, "patmatmotifs")
-    if not os.path.isfile(patmatmotifs_path):
-        raise FileNotFoundError(f"No se encontró 'patmatmotifs' en: {patmatmotifs_path}")
-    
-    # Create temporary output file
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".out") as temp_out:
-        output_path = temp_out.name
-    
-    try:
-        print(f"Ejecutando patmatmotifs...")
-        # Force analysis of all sequences with -sformat and -sbegin/-send parameters
-        result = subprocess.run([
-            patmatmotifs_path,
-            "-sequence", fasta_path,
-            "-outfile", output_path,
-            "-full", "Y",
-            "-auto", "Y",
-            "-sformat", "fasta",  # Explicitly specify FASTA format
-            "-sbegin", "1",       # Start from first position
-            "-send", "0"          # Process until end (0 means end)
-        ], check=True, capture_output=True, text=True)
-        print("patmatmotifs ejecutado exitosamente")
+    def analyze_individual_sequences(self, fasta_path: str, prosite_dat_path: str) -> str:
+        """
+        Analiza cada secuencia del FASTA por separado para asegurar procesamiento completo.
         
-        # Print any warnings or messages from patmatmotifs
-        if result.stderr:
-            print(f"Mensajes de patmatmotifs: {result.stderr}")
-        
-        # Read results
-        with open(output_path, "r") as result_file:
-            resultado = result_file.read()
-            print(f"Tamaño del archivo de resultados: {len(resultado)} caracteres")
+        Args:
+            fasta_path: Ruta al archivo FASTA
+            prosite_dat_path: Ruta al archivo prosite.dat
             
-    except subprocess.CalledProcessError as e:
-        print(f"Error ejecutando patmatmotifs: {e}")
-        if e.stderr:
-            print(f"Error detallado: {e.stderr}")
-        raise
-    finally:
-        # Clean up temporary file
-        if os.path.exists(output_path):
-            os.remove(output_path)
+        Returns:
+            Resultados combinados del análisis
+        """
+        # Intentar primero el método normal
+        try:
+            resultado_normal = self.analyze_motifs_domains(fasta_path, prosite_dat_path)
+            
+            # Verificar si se procesaron todas las secuencias
+            sequence_count_in_results = (resultado_normal.count('Sequence:') + 
+                                       resultado_normal.count('# Sequence'))
+            fasta_sequence_count, _ = self.count_sequences(fasta_path)
+            
+            if sequence_count_in_results >= fasta_sequence_count:
+                print(f"✓ Método normal procesó todas las secuencias "
+                      f"({sequence_count_in_results}/{fasta_sequence_count})")
+                return resultado_normal
+            else:
+                print(f"⚠ Método normal solo procesó {sequence_count_in_results}/"
+                      f"{fasta_sequence_count} secuencias")
+                print("Intentando método individual...")
+        except Exception as e:
+            print(f"Método normal falló: {e}")
+            print("Intentando método individual...")
+        
+        # Método individual
+        return self._analyze_sequences_individually(fasta_path, prosite_dat_path)
+
+    def _analyze_sequences_individually(self, fasta_path: str, prosite_dat_path: str) -> str:
+        """Analiza cada secuencia individualmente."""
+        sequences = self.extract_individual_sequences(fasta_path)
+        combined_results = []
+        
+        patmatmotifs_path = os.path.join(self.emboss_bin_path, "patmatmotifs")
+        
+        # Preparar base de datos PROSITE
+        prosite_dir = os.path.dirname(prosite_dat_path)
+        os.environ["EMBOSS_DATA"] = prosite_dir
+        self._run_prosextract(prosite_dir)
+        
+        for i, (header, seq) in enumerate(sequences, 1):
+            print(f"Procesando secuencia {i}/{len(sequences)}: {header[:50]}...")
+            
+            # Crear archivo temporal para esta secuencia
+            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=".fasta") as temp_fasta:
+                temp_fasta.write(f"{header}\n")
+                # Escribir secuencia en líneas de 80 caracteres
+                for j in range(0, len(seq), 80):
+                    temp_fasta.write(seq[j:j+80] + "\n")
+                temp_fasta_path = temp_fasta.name
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".out") as temp_out:
+                output_path = temp_out.name
+            
+            try:
+                subprocess.run([
+                    patmatmotifs_path,
+                    "-sequence", temp_fasta_path,
+                    "-outfile", output_path,
+                    "-full", "Y",
+                    "-auto", "Y"
+                ], check=True, capture_output=True, text=True)
+                
+                with open(output_path, "r") as result_file:
+                    resultado_individual = result_file.read()
+                    combined_results.append(
+                        f"\n{'='*60}\n{header}\n{'='*60}\n{resultado_individual}"
+                    )
+            
+            except subprocess.CalledProcessError as e:
+                combined_results.append(
+                    f"\n{'='*60}\n{header}\n{'='*60}\n"
+                    f"Error procesando esta secuencia: {e}\n"
+                )
+            
+            finally:
+                # Limpiar archivos temporales
+                for temp_file in [temp_fasta_path, output_path]:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+        
+        return "\n".join(combined_results)
+
+
+def save_analysis_results(results: str, output_fasta: str, prosite_path: str, 
+                         script_dir: str, analyzer: SequenceAnalyzer) -> str:
+    """
+    Guarda los resultados del análisis en un archivo de texto.
     
-    return resultado
+    Args:
+        results: Resultados del análisis
+        output_fasta: Ruta al archivo FASTA analizado
+        prosite_path: Ruta a la base de datos PROSITE
+        script_dir: Directorio del script
+        analyzer: Instancia del analizador para obtener información de secuencias
+        
+    Returns:
+        Ruta del archivo de resultados guardado
+    """
+    output_file = os.path.join(script_dir, "motifs_analysis_results.txt")
+    
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write("=== ANÁLISIS DE MOTIFS Y DOMINIOS PROSITE ===\n")
+        f.write(f"Archivo FASTA analizado: {output_fasta}\n")
+        f.write(f"Base de datos PROSITE: {prosite_path}\n")
+        f.write(f"Fecha y hora del análisis: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        
+        # Agregar información de secuencias
+        if os.path.exists(output_fasta):
+            try:
+                num_seq, info_seq = analyzer.count_sequences(output_fasta)
+                f.write(f"Número de secuencias analizadas: {num_seq}\n")
+                for i, (header, length) in enumerate(info_seq, 1):
+                    f.write(f"  Secuencia {i}: {header} (longitud: {length} aa)\n")
+            except Exception as e:
+                f.write(f"Error al obtener información de secuencias: {e}\n")
+        
+        f.write("=" * 70 + "\n\n")
+        f.write(results)
+    
+    return output_file
 
 
-
-
-if __name__ == "__main__":
-    script_dir=os.path.dirname(os.path.abspath(__file__))
+def main():
+    """Función principal del script."""
+    # Configuración de rutas
+    script_dir = os.path.dirname(os.path.abspath(__file__))
     fasta_file = os.path.join(script_dir, "APOE_mrnas_refseq_variant1.fasta")
     output_fasta = os.path.join(script_dir, "APOE_translated.fasta")
     emboss_dir = os.path.join(script_dir, 'emboss', 'bin')
-    PROSITE = os.path.join(script_dir, "prosite.dat")
+    prosite_path = os.path.join(script_dir, "prosite.dat")
+    
+    # Configuración de parámetros
     table = 1
     clean = True
 
-    six_frame_translation(
-        fasta_file,
-        output_fasta,
-        emboss_dir,  # si es None, dentro de la función caerá en DEFAULT_EMBOSS_DIR
-        table=table,
-        clean=clean)
-    
-    
-    
     try:
-    	# Use the enhanced analysis method that ensures all sequences are processed
-    	resultado = analizar_secuencias_individuales(output_fasta, PROSITE, emboss_dir)
+        # Traducción en seis marcos de lectura
+        print("=== INICIANDO TRADUCCIÓN EN SEIS MARCOS DE LECTURA ===")
+        translator = SixFrameTranslator(emboss_dir)
+        num_proteins = translator.translate(fasta_file, output_fasta, table, clean)
+        print(f"Traducción completada: {num_proteins} secuencias proteicas generadas")
 
-    
-    	# Save results to a text file
-    	output_file = os.path.join(script_dir, "motifs_analysis_results.txt")
-    	with open(output_file, "w", encoding="utf-8") as f:
-        	f.write("=== ANÁLISIS DE MOTIFS Y DOMINIOS PROSITE ===\n")
-        	f.write(f"Archivo FASTA analizado: {output_fasta}\n")
-        	f.write(f"Base de datos PROSITE: {PROSITE}\n")
-        	f.write(f"Fecha y hora del análisis: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        # Análisis de motifs y dominios
+        print("\n=== INICIANDO ANÁLISIS DE MOTIFS Y DOMINIOS ===")
+        analyzer = SequenceAnalyzer(emboss_dir)
+        results = analyzer.analyze_individual_sequences(output_fasta, prosite_path)
+
+        # Guardar resultados
+        output_file = save_analysis_results(
+            results, output_fasta, prosite_path, script_dir, analyzer
+        )
+        print(f"\nResultados guardados en: {output_file}")
         
-        	# Add sequence information
-        	if os.path.exists(output_fasta):
-            		num_seq, info_seq = contar_secuencias_fasta(output_fasta)
-            		f.write(f"Número de secuencias analizadas: {num_seq}\n")
-            		for i, (header, length) in enumerate(info_seq, 1):
-                		f.write(f"  Secuencia {i}: {header} (longitud: {length} aa)\n")
-        
-        	f.write("=" * 70 + "\n\n")
-        	f.write(resultado)
-    
-    	print(f"\nResultados guardados en: {output_file}")
     except Exception as e:
-    	print(f"Error en el análisis: {e}")
-    
+        print(f"Error en la ejecución: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
