@@ -184,34 +184,6 @@ class SequenceAnalyzer:
         
         return sequences
 
-    def analyze_motifs_domains(self, fasta_path: str, prosite_dat_path: str) -> str:
-        """
-        Analiza motifs y dominios en secuencias proteicas usando PROSITE.
-        
-        Args:
-            fasta_path: Ruta al archivo FASTA con secuencias proteicas
-            prosite_dat_path: Ruta al archivo prosite.dat
-            
-        Returns:
-            Resultado del análisis como string
-        """
-        # Validar archivos de entrada
-        if not os.path.isfile(fasta_path):
-            raise FileNotFoundError(f"Archivo FASTA no encontrado: {fasta_path}")
-        if not os.path.isfile(prosite_dat_path):
-            raise FileNotFoundError(f"Archivo prosite.dat no encontrado: {prosite_dat_path}")
-
-        prosite_dir = os.path.dirname(prosite_dat_path)
-        
-        # Configurar variables de entorno
-        os.environ["EMBOSS_DATA"] = prosite_dir
-        
-        # Ejecutar prosextract
-        self._run_prosextract(prosite_dir)
-        
-        # Ejecutar patmatmotifs
-        return self._run_patmatmotifs(fasta_path)
-
     def _run_prosextract(self, prosite_dir: str):
         """Ejecuta prosextract para preparar la base de datos PROSITE."""
         prosextract_path = os.path.join(self.emboss_bin_path, "prosextract")
@@ -239,46 +211,6 @@ class SequenceAnalyzer:
                     raise RuntimeError(f"Falló prosextract con todos los enfoques: {e}")
                 continue
 
-    def _run_patmatmotifs(self, fasta_path: str) -> str:
-        """Ejecuta patmatmotifs para el análisis de motifs."""
-        patmatmotifs_path = os.path.join(self.emboss_bin_path, "patmatmotifs")
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".out") as temp_out:
-            output_path = temp_out.name
-        
-        try:
-            print("Ejecutando patmatmotifs...")
-            cmd = [
-                patmatmotifs_path,
-                "-sequence", fasta_path,
-                "-outfile", output_path,
-                "-full", "Y",
-                "-auto", "Y",
-                "-sformat", "fasta",
-                "-sbegin", "1",
-                "-send", "0"
-            ]
-            
-            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-            print("patmatmotifs ejecutado exitosamente")
-            
-            if result.stderr:
-                print(f"Mensajes de patmatmotifs: {result.stderr}")
-            
-            with open(output_path, "r") as result_file:
-                resultado = result_file.read()
-                print(f"Tamaño del archivo de resultados: {len(resultado)} caracteres")
-                return resultado
-                
-        except subprocess.CalledProcessError as e:
-            print(f"Error ejecutando patmatmotifs: {e}")
-            if e.stderr:
-                print(f"Error detallado: {e.stderr}")
-            raise
-        finally:
-            if os.path.exists(output_path):
-                os.remove(output_path)
-
     def analyze_individual_sequences(self, fasta_path: str, prosite_dat_path: str) -> str:
         """
         Analiza cada secuencia del FASTA por separado para asegurar procesamiento completo.
@@ -290,28 +222,7 @@ class SequenceAnalyzer:
         Returns:
             Resultados combinados del análisis
         """
-        # Intentar primero el método normal
-        try:
-            resultado_normal = self.analyze_motifs_domains(fasta_path, prosite_dat_path)
-            
-            # Verificar si se procesaron todas las secuencias
-            sequence_count_in_results = (resultado_normal.count('Sequence:') + 
-                                       resultado_normal.count('# Sequence'))
-            fasta_sequence_count, _ = self.count_sequences(fasta_path)
-            
-            if sequence_count_in_results >= fasta_sequence_count:
-                print(f"✓ Método normal procesó todas las secuencias "
-                      f"({sequence_count_in_results}/{fasta_sequence_count})")
-                return resultado_normal
-            else:
-                print(f"⚠ Método normal solo procesó {sequence_count_in_results}/"
-                      f"{fasta_sequence_count} secuencias")
-                print("Intentando método individual...")
-        except Exception as e:
-            print(f"Método normal falló: {e}")
-            print("Intentando método individual...")
-        
-        # Método individual
+        print("Procesando secuencias individualmente...")
         return self._analyze_sequences_individually(fasta_path, prosite_dat_path)
 
     def _analyze_sequences_individually(self, fasta_path: str, prosite_dat_path: str) -> str:
