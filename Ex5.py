@@ -43,7 +43,7 @@ def modify_fasta_position(input_fasta: str,
         # Reconstruimos Seq y asignamos al record
         record.seq = Seq("".join(seq_list))
         modified_records.append(record)
-
+    print("HOLA QUE HACE")
     # Escribimos todas las secuencias modificadas al archivo de salida
     SeqIO.write(modified_records, output_fasta, "fasta")
 @dataclass
