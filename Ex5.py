@@ -60,8 +60,6 @@ class PrimerDesigner:
         if not sequence:
             raise ValueError("No se encontró secuencia válida en el archivo FASTA")
         
-        # Convertir de ARN a ADN (T por U) para el diseño de primers
-        sequence = sequence.replace('U', 'T')
         return sequence
     
     def calculate_gc_content(self, sequence: str) -> float:
