@@ -11,7 +11,41 @@ from typing import List, Dict, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
+def modify_fasta_position(input_fasta: str,
+                          output_fasta: str,
+                          position: int = 538,
+                          new_base: str = "C") -> None:
+    """
+    Lee un archivo FASTA, modifica el nucleótido/aminoácido en la posición indicada
+    (0-based) y escribe el resultado en un archivo nuevo.
 
+    Parámetros:
+    -----------
+    input_fasta : str
+        Ruta al archivo FASTA de entrada.
+    output_fasta : str
+        Ruta al archivo FASTA de salida donde se guardará la secuencia modificada.
+    position : int, opcional
+        Índice 0-based de la posición a modificar (por defecto 538).
+    new_base : str, opcional
+        Nuevo carácter a colocar en esa posición (por defecto "C").
+    """
+    modified_records = []
+
+    for record in SeqIO.parse(input_fasta, "fasta"):
+        seq_str = str(record.seq)
+        if position < 0 or position >= len(seq_str):
+            raise IndexError(f"La posición {position} está fuera del rango de la secuencia (longitud {len(seq_str)}).")
+
+        # Convertimos a lista para poder mutar el carácter
+        seq_list = list(seq_str)
+        seq_list[position] = new_base
+        # Reconstruimos Seq y asignamos al record
+        record.seq = Seq("".join(seq_list))
+        modified_records.append(record)
+
+    # Escribimos todas las secuencias modificadas al archivo de salida
+    SeqIO.write(modified_records, output_fasta, "fasta")
 @dataclass
 class PrimerConfig:
     """Configuración para el diseño de primers"""
@@ -265,7 +299,12 @@ def main():
     fasta_path = os.path.join(script_dir, 'APOE_mrnas_refseq_variant1.fasta')
     config_path = os.path.join(script_dir, 'config.json')
     output_path = os.path.join(script_dir, 'resultados.json')
-
+    modify_fasta_position(
+        fasta_path,
+        fasta_path,
+        position=538,
+        new_base="C"
+    )
     # Cambia esto a True si quieres generar un archivo de configuración por defecto
     create_config = False
 
