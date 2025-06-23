@@ -10,6 +10,8 @@ import math
 from typing import List, Dict, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+from Bio import SeqIO
+from Bio.Seq import Seq
 
 def modify_fasta_position(input_fasta: str,
                           output_fasta: str,
